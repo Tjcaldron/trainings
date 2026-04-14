@@ -1,0 +1,230 @@
+
+<style>
+#erd svg { width: 100%; }
+.layer-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  margin: 20px 0 4px;
+}
+.layer-divider {
+  border: none;
+  border-top: 1px dashed var(--color-border-secondary);
+  margin: 8px 0 4px;
+}
+</style>
+
+<div class="layer-label">🟫 Bronze layer — raw ingestion (single year via user input)</div>
+<div id="erd-bronze"></div>
+
+<hr class="layer-divider"/>
+<div class="layer-label">⬜ Silver layer — cleaned, typed, normalized (single year + combined tariff/shipper)</div>
+<div id="erd-silver"></div>
+
+<hr class="layer-divider"/>
+<div class="layer-label">🟡 Gold layer — aggregated summary (all three years)</div>
+<div id="erd-gold"></div>
+
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"Anthropic Sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"Anthropic Sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+
+const bronzeDiagram = `erDiagram
+  HEADER_RAW {
+    string identifier PK
+    string carrier_code
+    string vessel_name
+    string vessel_country_code
+    string port_of_unlading
+    date estimated_arrival_date
+    string foreign_port_of_lading_qualifier
+    int manifest_quantity
+    string manifest_unit
+    decimal weight
+    string weight_unit
+    decimal measurement
+    string measurement_unit
+  }
+
+  SHIPPER_RAW {
+    string identifier PK
+    string shipper_party_name
+    string shipper_party_address
+    string shipper_party_address_2
+    string shipper_party_address_3
+    string shipper_party_address_4
+    string city
+    string state_province
+    string zip_code
+    string country_code
+    string country_name
+    string comm_number_qualifier
+    string comm_number
+  }
+
+  CARGO_RAW {
+    string identifier PK
+    string container_number
+    int description_sequence_number
+    int piece_count
+    string description_text
+  }
+
+  TARIFF_RAW {
+    string identifier PK
+    int description_sequence_number
+    string container_number
+    string harmonized_number
+    decimal harmonized_value
+    decimal harmonized_weight_combined
+    decimal harmonized_weight_kg
+  }
+
+  HEADER_RAW ||--o{ SHIPPER_RAW : "identifier"
+  HEADER_RAW ||--o{ CARGO_RAW : "identifier"
+  HEADER_RAW ||--o{ TARIFF_RAW : "identifier"
+`;
+
+const silverDiagram = `erDiagram
+  HEADER_SILVER {
+    string identifier PK
+    string carrier_code
+    string vessel_name
+    string vessel_country_code
+    string port_of_unlading
+    date estimated_arrival_date
+    string foreign_port_of_lading_qualifier
+    decimal weight_combined
+    int year
+    date load_date
+    string source_system
+  }
+
+  SHIPPER_SILVER {
+    string identifier PK
+    string shipper_party_name
+    string city
+    string state_province
+    string zip_code
+    string country_code
+    string comm_number_qualifier
+    string comm_number
+    int year
+    date load_date
+    string source_system
+  }
+
+  CARGO_SILVER {
+    string identifier PK
+    string container_number
+    int description_sequence_number
+    int piece_count
+    string description_text
+    int year
+    date load_date
+    string source_system
+  }
+
+  TARIFF_SILVER {
+    string identifier PK
+    int description_sequence_number
+    string container_number
+    string harmonized_number
+    decimal harmonized_value
+    decimal harmonized_weight_combined
+    decimal harmonized_weight_kg
+    int year
+    date load_date
+    string source_system
+  }
+
+  COUNTRIES_SILVER {
+    string country_code PK
+    string country_name
+    int year
+  }
+
+  HEADER_SILVER ||--o{ SHIPPER_SILVER : "identifier"
+  HEADER_SILVER ||--o{ CARGO_SILVER : "identifier"
+  HEADER_SILVER ||--o{ TARIFF_SILVER : "identifier"
+  SHIPPER_SILVER }o--|| COUNTRIES_SILVER : "country_code"
+`;
+
+const goldDiagram = `erDiagram
+  TARIFF_AGG {
+    string identifier PK
+    int year PK
+    decimal total_harmonized_weight
+    string harmonized_weight_unit
+    int total_tariff_lines
+  }
+
+  SHIPPER_COMBINED {
+    string identifier PK
+    string shipper_party_name
+    string country_name
+    int year
+  }
+
+  GOLD_SUMMARY {
+    string shipper_party_name PK
+    string country_name
+    int year PK
+    decimal total_harmonized_weight
+    int total_shipments
+    date load_date
+    string source_system
+  }
+
+  TARIFF_AGG ||--|| GOLD_SUMMARY : "identifier"
+  SHIPPER_COMBINED ||--|| GOLD_SUMMARY : "identifier"
+`;
+
+async function renderDiagram(id, diagram) {
+  const { svg } = await mermaid.render(id + '-svg', diagram);
+  document.getElementById(id).innerHTML = svg;
+
+  document.querySelectorAll(`#${id} svg .node`).forEach(node => {
+    const firstPath = node.querySelector('path[d]');
+    if (!firstPath) return;
+    const d = firstPath.getAttribute('d');
+    const nums = d.match(/-?[\d.]+/g)?.map(Number);
+    if (!nums || nums.length < 8) return;
+    const xs = [nums[0], nums[2], nums[4], nums[6]];
+    const ys = [nums[1], nums[3], nums[5], nums[7]];
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', w); rect.setAttribute('height', h);
+    rect.setAttribute('rx', '8');
+    for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+      if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+    }
+    firstPath.replaceWith(rect);
+  });
+
+  document.querySelectorAll(`#${id} svg .row-rect-odd path, #${id} svg .row-rect-even path`).forEach(p => {
+    p.setAttribute('stroke', 'none');
+  });
+}
+
+await renderDiagram('erd-bronze', bronzeDiagram);
+await renderDiagram('erd-silver', silverDiagram);
+await renderDiagram('erd-gold', goldDiagram);
+</script>
